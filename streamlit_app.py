@@ -75,7 +75,10 @@ app_mode = st.sidebar.selectbox("Select Application", ["Download YouTube Audio",
 if app_mode == "Download YouTube Audio":
     st.title("Download YouTube Video as Audio")
     video_url = st.text_input("Enter YouTube Video URL:")
-    output_directory = st.text_input("Enter Output Directory Path:", "/content/")
+    output_directory = st.text_input("Enter Output Directory Path (e.g., './output/'):", "./output/")
+
+    if not os.path.exists(output_directory):
+        os.makedirs(output_directory)
 
     if st.button("Download and Convert"):
         if video_url and output_directory:
@@ -90,14 +93,15 @@ if app_mode == "Download YouTube Audio":
 
 elif app_mode == "Convert MP3 to Text":
     st.title("Convert Existing MP3 to Text")
-    mp3_file = st.text_input("Enter Path to MP3 File:")
-    output_directory = st.text_input("Enter Output Directory Path:", "/content/")
+    mp3_file = st.file_uploader("Upload an MP3 File", type=['mp3'])
+    output_directory = st.text_input("Enter Output Directory Path (e.g., './output/'):", "./output/")
 
-    if st.button("Convert to Text"):
-        if mp3_file and output_directory:
-            if os.path.exists(mp3_file):
-                process_audio_file(mp3_file, output_directory)
-            else:
-                st.warning("The specified MP3 file does not exist.")
-        else:
-            st.warning("Please enter both the MP3 file path and output directory path.")
+    if not os.path.exists(output_directory):
+        os.makedirs(output_directory)
+
+    if st.button("Convert to Text") and mp3_file is not None:
+        mp3_path = os.path.join(output_directory, mp3_file.name)
+        with open(mp3_path, 'wb') as f:
+            f.write(mp3_file.getbuffer())
+        
+        process_audio_file(mp3_path, output_directory)
