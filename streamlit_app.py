@@ -1,107 +1,76 @@
-import streamlit as st
-import yt_dlp
+import boto3
 import os
-import speech_recognition as sr
-from pydub import AudioSegment
-from pydub.utils import make_chunks
+import yt_dlp as youtube_dl
+from botocore.exceptions import ClientError
+import openai
+import streamlit as st
+from whisper import Whisper
 
-# Function to download YouTube audio
-def download_youtube_audio(url, output_path):
+# Access secrets from Streamlit Cloud
+aws_access_key_id = st.secrets["aws"]["aws_access_key_id"]
+aws_secret_access_key = st.secrets["aws"]["aws_secret_access_key"]
+
+# AWS S3 Setup
+session = boto3.Session(
+    aws_access_key_id=aws_access_key_id,
+    aws_secret_access_key=aws_secret_access_key
+)
+
+s3 = session.resource('s3')
+bucket_name = 'erman-demo-1'
+
+# Function to download YouTube video and extract audio
+def download_youtube_video(youtube_url, download_path="downloads"):
+    os.makedirs(download_path, exist_ok=True)
+    
     ydl_opts = {
         'format': 'bestaudio/best',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+        'outtmpl': os.path.join(download_path, 'video.%(ext)s'),
+        'quiet': True
     }
+    
+    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([youtube_url])
+    
+    # Return path to the downloaded file
+    return os.path.join(download_path, 'video.mp4')
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+# Function to transcribe audio to text using Whisper
+def transcribe_audio(audio_file_path):
+    # Load Whisper model (ensure you have Whisper installed and configured)
+    model = Whisper("base")  # You can use "small", "medium", "large" for better accuracy
+    result = model.transcribe(audio_file_path)
+    return result['text']
 
-    info = ydl.extract_info(url, download=False)
-    filename = ydl.prepare_filename(info)
-    audio_filename = os.path.splitext(filename)[0] + '.mp3'
-    return audio_filename
+# Function to upload file to S3
+def upload_to_s3(filename, bucket_name, key):
+    try:
+        s3.meta.client.upload_file(Filename=filename, Bucket=bucket_name, Key=key)
+        print("File uploaded successfully.")
+    except ClientError as e:
+        print(f"Error uploading file: {e}")
 
-# Function to convert MP3 audio to text
-def convert_mp3_to_text(mp3_file):
-    audio = AudioSegment.from_mp3(mp3_file)
-    wav_file = mp3_file.rsplit('.', 1)[0] + '.wav'
-    audio.export(wav_file, format="wav")
+# Streamlit UI setup
+st.title("YouTube Video to Text Transcription")
 
-    recognizer = sr.Recognizer()
-    chunk_length_ms = 60000  # 60 seconds
-    chunks = make_chunks(audio, chunk_length_ms)
+# Get YouTube URL from the user
+youtube_url = st.text_input("Enter YouTube Video URL")
 
-    full_text = []
-
-    for i, chunk in enumerate(chunks):
-        chunk_name = f'chunk{i}.wav'
-        chunk.export(chunk_name, format="wav")
-
-        with sr.AudioFile(chunk_name) as source:
-            audio = recognizer.record(source)
-
-        try:
-            text = recognizer.recognize_google(audio, language='ar')
-            full_text.append(text)
-        except sr.UnknownValueError:
-            st.warning(f"Could not understand audio in chunk {i+1}")
-        except sr.RequestError as e:
-            st.error(f"Error with recognition service: {e}")
-
-        os.remove(chunk_name)
-
-    os.remove(wav_file)
-    return ' '.join(full_text) if full_text else None
-
-# Main processing function
-def process_audio_file(file_path, output_directory):
-    text = convert_mp3_to_text(file_path)
-    if text:
-        text_file = os.path.join(output_directory, os.path.splitext(os.path.basename(file_path))[0] + '.txt')
-        with open(text_file, 'w', encoding='utf-8') as f:
-            f.write(text)
-        st.success(f"Text saved as: {text_file}")
-    else:
-        st.error("Failed to convert audio to text.")
-
-# Streamlit App
-st.sidebar.title("YouTube to Audio/Text App")
-app_mode = st.sidebar.selectbox("Select Application", ["Download YouTube Audio", "Convert MP3 to Text"])
-
-if app_mode == "Download YouTube Audio":
-    st.title("Download YouTube Video as Audio")
-    video_url = st.text_input("Enter YouTube Video URL:")
-    output_directory = st.text_input("Enter Output Directory Path (e.g., './output/'):", "./output/")
-
-    if not os.path.exists(output_directory):
-        os.makedirs(output_directory)
-
-    if st.button("Download and Convert"):
-        if video_url and output_directory:
-            try:
-                audio_file = download_youtube_audio(video_url, output_directory)
-                st.success(f"Audio saved as: {audio_file}")
-                process_audio_file(audio_file, output_directory)
-            except Exception as e:
-                st.error(f"An error occurred: {str(e)}")
-        else:
-            st.warning("Please enter both the video URL and output directory path.")
-
-elif app_mode == "Convert MP3 to Text":
-    st.title("Convert Existing MP3 to Text")
-    mp3_file = st.file_uploader("Upload an MP3 File", type=['mp3'])
-    output_directory = st.text_input("Enter Output Directory Path (e.g., './output/'):", "./output/")
-
-    if not os.path.exists(output_directory):
-        os.makedirs(output_directory)
-
-    if st.button("Convert to Text") and mp3_file is not None:
-        mp3_path = os.path.join(output_directory, mp3_file.name)
-        with open(mp3_path, 'wb') as f:
-            f.write(mp3_file.getbuffer())
-        
-        process_audio_file(mp3_path, output_directory)
+if youtube_url:
+    # Download YouTube video
+    video_path = download_youtube_video(youtube_url)
+    
+    # Convert audio to text
+    audio_file_path = video_path  # Assuming the video is already in the correct format
+    transcribed_text = transcribe_audio(audio_file_path)
+    
+    # Save the transcribed text to a file
+    text_filename = "transcribed_text.txt"
+    with open(text_filename, "w") as file:
+        file.write(transcribed_text)
+    
+    # Upload the text file to S3
+    upload_to_s3(text_filename, bucket_name, key=text_filename)
+    
+    # Display the transcribed text in the Streamlit app
+    st.text_area("Transcribed Text", transcribed_text, height=300)
