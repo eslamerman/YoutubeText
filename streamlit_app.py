@@ -2,8 +2,7 @@ import os
 import boto3
 import yt_dlp as youtube_dl
 from google.cloud import speech
-from google.cloud.speech import enums
-from google.cloud.speech import types
+from google.cloud.speech import RecognitionConfig, RecognitionAudio
 from botocore.exceptions import ClientError
 import streamlit as st
 
@@ -43,9 +42,9 @@ def transcribe_audio_google(audio_file_path):
     with open(audio_file_path, 'rb') as audio_file:
         content = audio_file.read()
 
-    audio = types.RecognitionAudio(content=content)
-    config = types.RecognitionConfig(
-        encoding=enums.RecognitionConfig.AudioEncoding.LINEAR16,
+    audio = RecognitionAudio(content=content)
+    config = RecognitionConfig(
+        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,  # Adjust if necessary
         sample_rate_hertz=16000,
         language_code="en-US",
     )
