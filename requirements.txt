@@ -1,4 +1,5 @@
-streamlit
-yt-dlp
-pydub
-SpeechRecognition
+boto3==1.26.4
+yt-dlp==2024.10.17
+whisper==1.0.0
+streamlit==1.24.0
+openai==0.27.0
