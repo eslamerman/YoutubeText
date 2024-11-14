@@ -1,5 +1,5 @@
 boto3
 yt-dlp
-whisper
+google-cloud-speech
 streamlit
-openai
+
