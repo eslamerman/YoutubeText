@@ -1,91 +1,116 @@
-import os
-import boto3
-import yt_dlp as youtube_dl
-from google.cloud import speech
-from google.cloud.speech import RecognitionConfig, RecognitionAudio
-from botocore.exceptions import ClientError
 import streamlit as st
+import boto3
+import yt_dlp
+import os
+from datetime import datetime
+import uuid
 
-# AWS S3 Setup
-aws_access_key_id = st.secrets["aws"]["aws_access_key_id"]
-aws_secret_access_key = st.secrets["aws"]["aws_secret_access_key"]
+class YouTubeProcessor:
+    def __init__(self):
+        # Initialize S3 client
+        self.s3_client = boto3.client(
+            's3',
+            aws_access_key_id = st.secrets["aws"]["aws_access_key_id"]
+            aws_secret_access_key = st.secrets["aws"]["aws_secret_access_key"]
+        )
+        self.bucket_name = 'erman-demo-1'
+        
+    def download_youtube_video(self, url, output_path):
+        """Download YouTube video"""
+        ydl_opts = {
+            'format': 'best',
+            'outtmpl': output_path,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+            info = ydl.extract_info(url, download=False)
+            return info['title']
 
-session = boto3.Session(
-    aws_access_key_id=aws_access_key_id,
-    aws_secret_access_key=aws_secret_access_key
-)
+    def convert_to_audio(self, video_path, audio_path):
+        """Convert video to audio using yt-dlp"""
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'outtmpl': audio_path,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([f"file://{video_path}"])
 
-s3 = session.resource('s3')
-bucket_name = 'erman-demo-1'
+    def upload_to_s3(self, file_path, s3_key):
+        """Upload file to S3"""
+        try:
+            self.s3_client.upload_file(file_path, self.bucket_name, s3_key)
+            return f"s3://{self.bucket_name}/{s3_key}"
+        except Exception as e:
+            st.error(f"Error uploading to S3: {str(e)}")
+            return None
 
-# Function to download YouTube video and extract audio
-def download_youtube_video(youtube_url, download_path="downloads"):
-    os.makedirs(download_path, exist_ok=True)
-    
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': os.path.join(download_path, 'audio.%(ext)s'),
-        'quiet': True
-    }
-    
-    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([youtube_url])
-    
-    # Return path to the downloaded audio file (e.g., mp3, webm)
-    return os.path.join(download_path, 'audio.mp4')
+def main():
+    st.title("YouTube Video Processor")
+    st.write("Enter a YouTube URL to download, upload to S3, and convert to audio")
 
-# Function to transcribe audio to text using Google Cloud Speech-to-Text
-def transcribe_audio_google(audio_file_path):
-    # Initialize Google Cloud Speech client
-    client = speech.SpeechClient()
+    # Initialize processor
+    processor = YouTubeProcessor()
 
-    with open(audio_file_path, 'rb') as audio_file:
-        content = audio_file.read()
+    # Get YouTube URL from user
+    youtube_url = st.text_input("Enter YouTube URL:")
 
-    audio = RecognitionAudio(content=content)
-    config = RecognitionConfig(
-        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,  # Adjust if necessary
-        sample_rate_hertz=16000,
-        language_code="en-US",
-    )
+    if st.button("Process Video"):
+        if youtube_url:
+            try:
+                with st.spinner("Processing..."):
+                    # Create temporary file paths
+                    temp_dir = "temp"
+                    os.makedirs(temp_dir, exist_ok=True)
+                    
+                    # Generate unique identifiers for files
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    unique_id = str(uuid.uuid4())[:8]
+                    
+                    video_filename = f"video_{timestamp}_{unique_id}.mp4"
+                    audio_filename = f"audio_{timestamp}_{unique_id}.mp3"
+                    
+                    video_path = os.path.join(temp_dir, video_filename)
+                    audio_path = os.path.join(temp_dir, audio_filename)
 
-    response = client.recognize(config=config, audio=audio)
+                    # Step 1: Download YouTube video
+                    st.write("Downloading video...")
+                    video_title = processor.download_youtube_video(youtube_url, video_path)
+                    st.success("Video downloaded successfully!")
 
-    # Extracting the transcribed text from the response
-    transcribed_text = ""
-    for result in response.results:
-        transcribed_text += result.alternatives[0].transcript + "\n"
-    
-    return transcribed_text
+                    # Step 2: Upload video to S3
+                    st.write("Uploading video to S3...")
+                    s3_video_key = f"videos/{video_filename}"
+                    s3_video_url = processor.upload_to_s3(video_path, s3_video_key)
+                    if s3_video_url:
+                        st.success("Video uploaded to S3!")
+                        st.write(f"S3 Video URL: {s3_video_url}")
 
-# Function to upload file to S3
-def upload_to_s3(filename, bucket_name, key):
-    try:
-        s3.meta.client.upload_file(Filename=filename, Bucket=bucket_name, Key=key)
-        print("File uploaded successfully.")
-    except ClientError as e:
-        print(f"Error uploading file: {e}")
+                    # Step 3: Convert to audio
+                    st.write("Converting to audio...")
+                    processor.convert_to_audio(video_path, audio_path)
+                    
+                    # Step 4: Upload audio to S3
+                    s3_audio_key = f"audio/{audio_filename}"
+                    s3_audio_url = processor.upload_to_s3(audio_path, s3_audio_key)
+                    if s3_audio_url:
+                        st.success("Audio uploaded to S3!")
+                        st.write(f"S3 Audio URL: {s3_audio_url}")
 
-# Streamlit UI setup
-st.title("YouTube Video to Text Transcription")
+                    # Clean up temporary files
+                    if os.path.exists(video_path):
+                        os.remove(video_path)
+                    if os.path.exists(audio_path):
+                        os.remove(audio_path)
 
-# Get YouTube URL from the user
-youtube_url = st.text_input("Enter YouTube Video URL")
+            except Exception as e:
+                st.error(f"An error occurred: {str(e)}")
+        else:
+            st.warning("Please enter a YouTube URL")
 
-if youtube_url:
-    # Download YouTube video
-    video_path = download_youtube_video(youtube_url)
-    
-    # Convert audio to text using Google Cloud Speech-to-Text
-    transcribed_text = transcribe_audio_google(video_path)
-    
-    # Save the transcribed text to a file
-    text_filename = "transcribed_text.txt"
-    with open(text_filename, "w") as file:
-        file.write(transcribed_text)
-    
-    # Upload the text file to S3
-    upload_to_s3(text_filename, bucket_name, key=text_filename)
-    
-    # Display the transcribed text in the Streamlit app
-    st.text_area("Transcribed Text", transcribed_text, height=300)
+if __name__ == "__main__":
+    main()
