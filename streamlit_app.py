@@ -1,16 +1,16 @@
-import boto3
 import os
+import boto3
 import yt_dlp as youtube_dl
+from google.cloud import speech
+from google.cloud.speech import enums
+from google.cloud.speech import types
 from botocore.exceptions import ClientError
-import openai
 import streamlit as st
-from whisper import Whisper
 
-# Access secrets from Streamlit Cloud
+# AWS S3 Setup
 aws_access_key_id = st.secrets["aws"]["aws_access_key_id"]
 aws_secret_access_key = st.secrets["aws"]["aws_secret_access_key"]
 
-# AWS S3 Setup
 session = boto3.Session(
     aws_access_key_id=aws_access_key_id,
     aws_secret_access_key=aws_secret_access_key
@@ -25,22 +25,39 @@ def download_youtube_video(youtube_url, download_path="downloads"):
     
     ydl_opts = {
         'format': 'bestaudio/best',
-        'outtmpl': os.path.join(download_path, 'video.%(ext)s'),
+        'outtmpl': os.path.join(download_path, 'audio.%(ext)s'),
         'quiet': True
     }
     
     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
         ydl.download([youtube_url])
     
-    # Return path to the downloaded file
-    return os.path.join(download_path, 'video.mp4')
+    # Return path to the downloaded audio file (e.g., mp3, webm)
+    return os.path.join(download_path, 'audio.mp4')
 
-# Function to transcribe audio to text using Whisper
-def transcribe_audio(audio_file_path):
-    # Load Whisper model (ensure you have Whisper installed and configured)
-    model = Whisper("base")  # You can use "small", "medium", "large" for better accuracy
-    result = model.transcribe(audio_file_path)
-    return result['text']
+# Function to transcribe audio to text using Google Cloud Speech-to-Text
+def transcribe_audio_google(audio_file_path):
+    # Initialize Google Cloud Speech client
+    client = speech.SpeechClient()
+
+    with open(audio_file_path, 'rb') as audio_file:
+        content = audio_file.read()
+
+    audio = types.RecognitionAudio(content=content)
+    config = types.RecognitionConfig(
+        encoding=enums.RecognitionConfig.AudioEncoding.LINEAR16,
+        sample_rate_hertz=16000,
+        language_code="en-US",
+    )
+
+    response = client.recognize(config=config, audio=audio)
+
+    # Extracting the transcribed text from the response
+    transcribed_text = ""
+    for result in response.results:
+        transcribed_text += result.alternatives[0].transcript + "\n"
+    
+    return transcribed_text
 
 # Function to upload file to S3
 def upload_to_s3(filename, bucket_name, key):
@@ -60,9 +77,8 @@ if youtube_url:
     # Download YouTube video
     video_path = download_youtube_video(youtube_url)
     
-    # Convert audio to text
-    audio_file_path = video_path  # Assuming the video is already in the correct format
-    transcribed_text = transcribe_audio(audio_file_path)
+    # Convert audio to text using Google Cloud Speech-to-Text
+    transcribed_text = transcribe_audio_google(video_path)
     
     # Save the transcribed text to a file
     text_filename = "transcribed_text.txt"
