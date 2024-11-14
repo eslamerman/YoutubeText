@@ -1,4 +1,3 @@
-boto3
-yt-dlp
-google-cloud-speech
-streamlit
+pip install streamlit
+pip install boto3
+pip install yt-dlp
